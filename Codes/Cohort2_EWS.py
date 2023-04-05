@@ -12,21 +12,35 @@ import zipfile
 import pandas as pd
 import datetime as dt
 import pymannkendall as mk
+import random
 import scipy.ndimage as ndimage
 tarr=[]
 ctr=0
 t=0
 tp=0
-df=pd.read_csv('Cohort1_FailExtTimes.txt',sep='\t')
-uid=df['ID'].to_list()
-cohort2=[i.split('.')[0] for i in uid]
-print(uid)
-et=df['ActualExtTime'].to_list()
-id_et=dict(zip(uid,et))
-rit=df['ActualReintTime']
+df0=pd.read_csv('Cohort1_FailExtTimes.txt',sep='\t')
+uid0=df0['ID'].to_list()
+cohort2=[i.split('.')[0] for i in uid0]
+print(uid0)
+et0=df0['ActualExtTime'].to_list()
+id_et0=dict(zip(uid0,et0))
+rit0=df0['ActualReintTime'].to_list()
+id_rit0=dict(zip(uid0,rit0))
+
+
+df2=pd.read_csv('v1_Stratified_Cohort2.dat',sep='\t')
+uid=df2['PatientID'].to_list()
+cohort1=[i.split('.')[0] for i in uid]
+et=df2['EtCO2endTime'].to_list()
+et2=df2['ExtubationTime'].to_list()
+etp=[dt.datetime.strptime(i, '%d-%m-%Y %H:%M') for i in et]
+et2p=[dt.datetime.strptime(i, '%d-%m-%Y %H:%M') for i in et2]
+et_m=[max(i,j) for i,j in zip(etp,et2p)]
+id_et=dict(zip(uid,et_m))
+rit=df2['Reint'].to_list()
 id_rit=dict(zip(uid,rit))
-extsc=df['ExtScore'].to_list()
-id_exsc=dict(zip(uid,extsc))
+extsc=df2['ExtScore'].to_list()
+id_exsc=dict(zip(uid,rit))
 
 df0=pd.read_csv('patient_icu_ward_stay_list_deid.csv',sep=',')
 ddate=df0['death_deid_date'].to_list()
@@ -59,6 +73,7 @@ def corrfun(t,x,l=1):#ACF(l)
         xp.append(x[i])
     rk=rk/denom
     return rk,np.var(xp)
+
 
 def ews(t_st, a,ws):
     #corr_mat=[]
@@ -117,9 +132,12 @@ def evensampling(time,x):
             tp=time[i]
     return(tnew,xnew,flag)
             
-
-# if((t-tp).total_seconds()<6):
-
+    
+    
+        
+monitorslist=['ARTm','ABPm','HR', 'SpO2']
+arr=[]
+timearr=[]
 with zipfile.ZipFile('DataExtraction.zip') as z:
     for filename in z.namelist():
         if not os.path.isdir(filename):
@@ -133,16 +151,16 @@ with zipfile.ZipFile('DataExtraction.zip') as z:
             else:
                 continue
             if(ID in uid):
-                if(temp[len(temp)-1]=='HR.csv'):#read the file
+                if(temp[len(temp)-1]=='SpO2.csv'):#read the file
                     nid=ID
                     
                     ctr=0
-                    text=dt.datetime.strptime(id_et[nid], '%d-%m-%Y %H:%M')
-                    trit=dt.datetime.strptime(id_rit[nid], '%d-%m-%Y %H:%M')
-                    exsc=id_exsc[nid]
+                    text=id_et[nid]#dt.datetime.strptime(id_et[nid], '%d-%m-%Y %H:%M')
                     
+                    trit=text+dt.timedelta(seconds=int(id_rit[nid]))
+                    exsc=id_exsc[nid]
                     with z.open(filename) as f:
-                        if((trit-text).total_seconds()>60*120 and (float(exsc)>2.5)):
+                        if((trit-text).total_seconds()>60*120):# and (float(exsc)>2.5)
                             print(filename)
                             for line in f:
                                 ctr=ctr+1
@@ -153,36 +171,45 @@ with zipfile.ZipFile('DataExtraction.zip') as z:
                                 temp2=temp2p.split(',')
                                 t= dt.datetime.strptime(temp2[1], '%Y-%m-%d %H:%M:%S')
                     
-                                if((t>text) and (t<trit) and (temp2[0]=='HR')):
+                                if((t>text) and (t<trit) and (temp2[0] in monitorslist)):
                                     timearr.append(t)
                                     arr.append(float(temp2[2]))
                                 if(t>trit):
                                     break
-                            if(len(arr)*5<.75*(trit-text).total_seconds()):
-                                print("Too Few")
+                            #if(len(arr)*5<.75*(trit-text).total_seconds()):
+                            #    print("Too Few")
+                            #    arr=[]
+                            #    timearr=[]
+                            #    continue
+                            try:
+                                if(len(arr)>2*720):
+                                    print(text,trit)
+                                    timearr,arr, flag=evensampling(timearr,arr)
+                                    if(len(arr)<1000):
+                                        arr=[]
+                                        timearr=[]
+                                        continue
+                                    #if(flag==True):
+                                    #    arr=[]
+                                    #    timearr=[]
+                                    #    continue
+                                    arr_smooth = ndimage.gaussian_filter1d(arr, sigma=100)
+                                    arr = arr - arr_smooth
+                                    arr= outlier(arr)
+                                    #print(len(arr))
+                                    res=ews(timearr,arr,720)
+                                    tarr.append([nid,res[0],res[1],res[2],res[3]])
+                                    larr.append(len(arr))
+                                    
+                                arr=[]
+                                timearr=[]
+                            except:
                                 arr=[]
                                 timearr=[]
                                 continue
-                            if(len(arr)>2*720):
-                                print(text,trit)
-                                timearr,arr, flag=evensampling(timearr,arr)
-                                if(flag==True):
-                                    arr=[]
-                                    timearr=[]
-                                    continue
-                                arr_smooth = ndimage.gaussian_filter1d(arr, sigma=100)
-                                arr = arr - arr_smooth
-                                arr= outlier(arr)
-                                #print(len(arr))
-                                res=ews(timearr,arr,720)
-                                tarr.append([nid,res[0],res[1],res[2],res[3]])
-                                larr.append(len(arr))
-                                
-                            arr=[]
-                            timearr=[]
                         else:
                             continue
+df=pd.DataFrame(tarr, columns=['ID','ACF-p','ACF-Tau','Var-p','Var-Tau'])
 dflag_t=[id_dflag[i[0]] for i in tarr]
-df2=pd.DataFrame(tarr, columns=['ID','ACF-p','ACF-Tau','Var-p','Var-Tau'])
-df2['death_flag']=dflag_t
-df2.to_csv('DT_HR_v2_Taus_Cohort1_60min.dat',sep='\t')
+df['death_flag']=dflag_t
+df.to_csv('DT_Coh2_SpO2_Taus_60min_Stratified_v2_noExScCutoff_NoLargeGapCutOff.dat',sep='\t')
